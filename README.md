@@ -25,7 +25,7 @@ A real-time screen-capture translator designed specifically for World of Warcraf
 
 1. Clone the repository.
 2. Install dependencies: `pip install -r requirements.txt`
-3. Add `GEMINI_API_KEY` to `.env` (optional).
+3. (Optional) Enter your `GEMINI_API_KEY` directly in the application's **KEY** field or add it to a `.env` file.
 
 ## Usage
 
@@ -68,7 +68,7 @@ A real-time screen-capture translator designed specifically for World of Warcraf
 
 1. Скачайте проект или склонируйте репозиторий.
 2. Установите зависимости: `pip install -r requirements.txt`
-3. Создайте файл `.env` и добавьте туда `GEMINI_API_KEY=ваш_ключ` (если планируете использовать Gemini).
+3. (Опционально) Введите ваш `GEMINI_API_KEY` прямо в поле **KEY** в приложении или добавьте его в файл `.env`.
 
 ## Как пользоваться
 
