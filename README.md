@@ -4,8 +4,6 @@
 
 A real-time screen-capture translator designed specifically for World of Warcraft. It captures the chat area, performs OCR, and translates messages using LLMs (Local or Gemini) or Google Translate.
 
-![Preview](https://via.placeholder.com/800x450.png?text=WoW+Chat+Translator+Overlay+Preview)
-
 ## Features
 
 - **Real-time OCR**: Uses Windows WinRT OCR for high performance and accuracy.
