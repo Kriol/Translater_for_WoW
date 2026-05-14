@@ -1,0 +1,11 @@
+# WoW Chat Translator — Python dependencies
+# Install with: pip install -r requirements.txt
+# Requires Python 3.10+ and Windows (WinRT OCR is Windows-only)
+
+opencv-python>=4.9
+Pillow>=10.0
+pyperclip>=1.8
+requests>=2.31
+winsdk>=1.0.0b10
+deep-translator>=1.11.4
+python-dotenv>=1.0.0
