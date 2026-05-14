@@ -28,9 +28,27 @@ class TranslatorClient:
         if key and key != self.api_key:
             self.api_key = key
             try:
-                # Simple configuration without network calls to avoid UI freezing
+                # Simple configuration
                 self.client = genai.Client(api_key=self.api_key)
-                LOGGER.info("GenAI SDK configured with Gemini 3 Flash.")
+                
+                # Dynamically determine the best Gemini model available
+                best_model = "gemini-2.5-flash"  # Safe fallback
+                try:
+                    available = [m.name.split("/")[-1] for m in self.client.models.list()]
+                    # Target Gemini 3 Flash series, ignore specific modalities
+                    g3_models = [
+                        m for m in available 
+                        if "gemini-3" in m and "flash" in m and "image" not in m and "audio" not in m and "tts" not in m and "live" not in m
+                    ]
+                    if g3_models:
+                        # Prefer stable models over previews
+                        g3_models.sort(key=lambda x: ("preview" not in x, x), reverse=True)
+                        best_model = g3_models[0]
+                except Exception as e:
+                    LOGGER.warning(f"Failed to dynamically query Gemini models, using default. ({e})")
+                
+                self.gemini_model_id = best_model
+                LOGGER.info(f"GenAI SDK configured with model: {self.gemini_model_id}")
             except Exception as e:
                 LOGGER.error(f"Failed to configure GenAI SDK: {e}")
                 self.client = None
@@ -94,7 +112,10 @@ class TranslatorClient:
                     if resp and resp.text:
                         return resp.text.strip(), "Gemini"
                 except Exception as ge:
-                    LOGGER.warning(f"Gemini API failed: {ge}")
+                    if "429" in str(ge):
+                        LOGGER.warning("Gemini API rate limit exceeded (429). Falling back...")
+                    else:
+                        LOGGER.warning(f"Gemini API failed: {ge}")
 
             # 4. Google Fallback
             try:
@@ -147,8 +168,11 @@ class TranslatorClient:
                     resp = self.client.models.generate_content(model=self.gemini_model_id, contents=p)
                     if resp and resp.text:
                         return resp.text.strip(), "Gemini"
-                except Exception:
-                    pass
+                except Exception as ge:
+                    if "429" in str(ge):
+                        LOGGER.warning("Gemini API rate limit exceeded (429) during manual translation.")
+                    else:
+                        LOGGER.warning(f"Gemini manual translation failed: {ge}")
 
             # 3. Google Fallback
             try:

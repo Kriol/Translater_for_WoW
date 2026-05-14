@@ -34,6 +34,12 @@ from translator import ReasoningOnlyModelError, TranslatorClient
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(threadName)s: %(message)s")
+# Suppress noisy logs from third-party libraries like httpx (used by genai) and urllib3
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("google").setLevel(logging.WARNING)
+
 LOGGER = logging.getLogger("wow_translator")
 
 
@@ -56,6 +62,7 @@ class WoWTranslatorApp:
         self.last_similarity_key = ""
         self.last_displayed_text = ""
         self.last_translation_at = 0.0
+        self.last_thresh = None
 
         self.input_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
@@ -443,12 +450,41 @@ class WoWTranslatorApp:
                     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
                     pil_image = Image.fromarray(thresh)
-                    raw_text = loop.run_until_complete(self.win_ocr.recognize_text(pil_image))
-                    normalized_text = self.normalize_ocr_text(raw_text)
+                    
+                    # Optimization: 10x3 grid image comparison to avoid unnecessary OCR and API calls
+                    should_process = True
+                    if self.last_thresh is not None and self.last_thresh.shape == thresh.shape:
+                        h, w = thresh.shape
+                        cell_h, cell_w = h // 10, w // 3
+                        diff = cv2.absdiff(thresh, self.last_thresh)
+                        
+                        changed_enough = False
+                        for row in range(10):
+                            for col in range(3):
+                                y1, y2 = row * cell_h, h if row == 9 else (row + 1) * cell_h
+                                x1, x2 = col * cell_w, w if col == 2 else (col + 1) * cell_w
+                                
+                                cell_diff = diff[y1:y2, x1:x2]
+                                changed_pixels = cv2.countNonZero(cell_diff)
+                                cell_area = (y2 - y1) * (x2 - x1)
+                                
+                                if changed_pixels / cell_area > 0.04:  # 4% change in any cell is enough
+                                    changed_enough = True
+                                    break
+                            if changed_enough:
+                                break
+                                
+                        if not changed_enough:
+                            should_process = False
 
-                    if normalized_text and self.should_enqueue_text(normalized_text):
-                        self.enqueue_latest_translation(normalized_text)
-                        self.ui_queue.put(("status", "Status: translating..."))
+                    if should_process:
+                        self.last_thresh = thresh.copy()
+                        raw_text = loop.run_until_complete(self.win_ocr.recognize_text(pil_image))
+                        normalized_text = self.normalize_ocr_text(raw_text)
+
+                        if normalized_text and self.should_enqueue_text(normalized_text):
+                            self.enqueue_latest_translation(normalized_text)
+                            self.ui_queue.put(("status", "Status: translating..."))
 
                 except Exception:
                     LOGGER.exception("Capture/OCR pipeline failed.")
