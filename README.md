@@ -34,6 +34,9 @@ A real-time screen-capture translator designed specifically for World of Warcraf
 3. **LOCK**: Make the frame click-through.
 4. **Manual Input**: Type Russian, press Enter, then `Ctrl+V` in WoW.
 
+> [!TIP]
+> **For best OCR quality**: Set your in-game WoW chat window background to **black** and **non-transparent** (100% opaque).
+
 ## How to Build EXE
 
 `pyinstaller --noconfirm WoW_Translator.spec`
@@ -53,7 +56,7 @@ A real-time screen-capture translator designed specifically for World of Warcraf
   - **Google Translate**: Надежный запасной вариант.
 - **"Призрачный" оверлей**: Прозрачная рамка, которая не мешает кликам и скроллу внутри игры.
 - **Обратный перевод**: Ввод текста на русском -> автоматический перевод на английский -> копирование в буфер обмена для быстрых ответов.
-- **Авто-исправление**: Исправляет ошибки OCR (например, путаницу кириллических и латинских букв в никах).
+- **Auto-Fixing**: Исправляет ошибки OCR (например, путаницу кириллических и латинских букв в никах).
 
 ## Требования
 
@@ -73,6 +76,9 @@ A real-time screen-capture translator designed specifically for World of Warcraf
 2. **SET REGION**: Нажмите кнопку и растяните красную рамку над чатом игры.
 3. **LOCK**: Нажмите Lock, чтобы рамка стала "прозрачной" для мышки. Теперь вы сможете кликать и скроллить чат WoW прямо сквозь неё.
 4. **Ручной ввод**: Пишите в нижнем поле на русском и жмите **Enter**. Перевод сразу окажется в буфере обмена — просто нажмите `Ctrl+V` в игре.
+
+> [!TIP]
+> **Для лучшего качества распознавания**: Установите фон чата в самой игре на **черный** и полностью **уберите прозрачность** (сделайте его непрозрачным).
 
 ## Как собрать EXE
 
