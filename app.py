@@ -47,7 +47,7 @@ class WoWTranslatorApp:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.geometry(WINDOW_GEOMETRY)
-        self.root.overrideredirect(True)
+        self.root.overrideredirect(True)  # type: ignore[attr-defined]
         self.root.attributes("-topmost", True, "-alpha", 0.95)
         self.root.config(bg="#000")
 
@@ -57,6 +57,7 @@ class WoWTranslatorApp:
 
         self.overlay = None
         self.is_region_locked = False
+        self.translation_enabled = True
         self.subtitle_region = None
         self.last_raw_text = ""
         self.last_similarity_key = ""
@@ -69,6 +70,7 @@ class WoWTranslatorApp:
         self.api_key_var.trace_add("write", self.on_api_key_change)
         self.manual_request_seq = 0
         self.latest_manual_request_id = 0
+        self._is_manual_translating: bool = False
 
         self.ui_queue: Queue[tuple[str, str]] = Queue()
         self.translation_queue: Queue[str | None] = Queue(maxsize=1)
@@ -143,6 +145,18 @@ class WoWTranslatorApp:
             font=("Arial", 8),
         )
         self.btn_clr.pack(side=tk.LEFT)
+
+        self.btn_toggle_tl = tk.Button(
+            self.top_panel,
+            text="TL: ON",
+            command=self.toggle_translation,
+            bg="#006400",
+            fg="white",
+            bd=0,
+            padx=10,
+            font=("Arial", 8, "bold"),
+        )
+        self.btn_toggle_tl.pack(side=tk.LEFT, padx=5)
 
         # Gemini API Key input (Wider, no stars for clarity if user can't see what they type)
         self.api_key_entry = tk.Entry(
@@ -305,6 +319,16 @@ class WoWTranslatorApp:
         new_height = max(220, self.sh + (event.y_root - self.my))  # 220 keeps bottom panel visible
         self.root.geometry(f"{new_width}x{new_height}")
 
+    def toggle_translation(self) -> None:
+        self.translation_enabled = not self.translation_enabled
+        if self.translation_enabled:
+            self.btn_toggle_tl.config(text="TL: ON", bg="#006400")
+            self.set_status("Status: Auto-translation resumed")
+            self.last_thresh = None
+        else:
+            self.btn_toggle_tl.config(text="TL: OFF", bg="#8B0000")
+            self.set_status("Status: Auto-translation paused")
+
     def toggle_overlay(self) -> None:
         if self.overlay and self.overlay.winfo_exists():
             self.overlay.destroy()
@@ -317,7 +341,7 @@ class WoWTranslatorApp:
 
         self.overlay = tk.Toplevel(self.root)
         self.overlay.overrideredirect(True)
-        self.overlay.attributes("-topmost", True, "-alpha", 0.08)
+        self.overlay.attributes("-topmost", True, "-alpha", 0.3)
         self.overlay.config(bg="black")
         self.overlay.geometry(OVERLAY_GEOMETRY)
 
@@ -366,14 +390,17 @@ class WoWTranslatorApp:
                 # Add click-through style
                 ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT | WS_EX_LAYERED)
                 self.is_region_locked = True
+                self.overlay.attributes("-alpha", 0.05)
                 self.btn_lock.config(text="UNLOCK", bg="#8B0000")
                 self.ov_res.place_forget()
                 self.ov_frame.config(highlightbackground="#FF3131")
+                self.last_thresh = None
                 self.set_status("Status: region locked (click-through)")
             else:
                 # Remove click-through style
                 ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT)
                 self.is_region_locked = False
+                self.overlay.attributes("-alpha", 0.3)
                 self.btn_lock.config(text="LOCK", bg="#333")
                 self.ov_res.place(relx=1.0, rely=1.0, x=-25, y=-25)
                 self.ov_frame.config(highlightbackground="#FF0000")
@@ -425,7 +452,8 @@ class WoWTranslatorApp:
         y = self.overlay.winfo_rooty()
         w = self.overlay.winfo_width()
         h = self.overlay.winfo_height()
-        self.set_region((x, y, x + w, y + h))
+        # Exclude the 3px highlight border from the capture region so it doesn't corrupt OCR
+        self.set_region((x + 3, y + 3, x + w - 3, y + h - 3))
 
     def capture_loop(self) -> None:
         # Each worker thread owns its own event loop — avoids cross-thread loop sharing
@@ -435,6 +463,10 @@ class WoWTranslatorApp:
 
         try:
             while not self.stop_event.is_set():
+                if not self.translation_enabled or not self.is_region_locked:
+                    self.stop_event.wait(CAPTURE_INTERVAL_SECONDS)
+                    continue
+
                 region = self.get_region()
                 if not region:
                     self.stop_event.wait(CAPTURE_INTERVAL_SECONDS)
@@ -445,8 +477,8 @@ class WoWTranslatorApp:
 
                     img = cv2.resize(np.array(shot), None, fx=4.0, fy=4.0, interpolation=cv2.INTER_LANCZOS4)
                     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    gray = cv2.bilateralFilter(gray, 5, 75, 75)
-                    gray = self._clahe.apply(gray)
+                    # Mild filter to remove noise without blurring characters
+                    gray = cv2.bilateralFilter(gray, 3, 40, 40)
                     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
                     pil_image = Image.fromarray(thresh)
@@ -511,13 +543,16 @@ class WoWTranslatorApp:
 
             try:
                 chat_lines = self.extract_chat_lines(raw_text)
-                # Update translator with latest API Key from UI before translating
+                
+                # Обновить translator с последним API Key из UI перед переводом
                 self.translator.set_api_key(self.api_key_var.get().strip())
+                
+                # Переводим все сообщения за один быстрый и дешевый запрос к API
                 translated_text, engine_name = self.translator.translate_lines(chat_lines)
-                # "SKIP" is the sentinel the LLM returns when it detects garbage input
+                
+                # Проверяем на sentinel и валидность
                 if translated_text and translated_text.strip().upper() != "SKIP":
-                    formatted = self._format_translation_lines(translated_text)
-                    self.ui_queue.put(("translation", formatted))
+                    self.ui_queue.put(("translation", translated_text))
                     self.ui_queue.put(("status", f"Status: updated via {engine_name}"))
                     self.model_failure_logged = False
                 else:
@@ -569,20 +604,89 @@ class WoWTranslatorApp:
         if not text:
             return ""
 
-        # Apply Cyrillic→Latin substitution only to structural parts (names, keywords),
-        # leaving Russian message bodies intact so the LLM can read them correctly
-        cleaned = self._fix_structural_cyrillic(text)
-        cleaned = cleaned.replace("|", " ").replace("_", " ")
-        # Safety fallback: "То" = Cyrillic Т + Cyrillic о; "Тo" = Cyrillic Т + Latin o
-        cleaned = cleaned.replace("То ", "To ").replace("то ", "to ")
-        cleaned = cleaned.replace("Тo ", "To ").replace("тo ", "to ")
-        # Collapse horizontal whitespace only — preserve \n that WinRT OCR already detected
-        cleaned = re.sub(r"[^\S\n]+", " ", cleaned).strip()
-        cleaned = re.sub(r"(?i)\b([a-z])\1{2,}\b", r"\1", cleaned)
-        cleaned = re.sub(r"(?i)whispers\s*:\s*To\s+\[", "whispers: [", cleaned)
-        cleaned = re.sub(r"(?i)To\s+\[([^\]]+?)1\s*:", r"To [\1]:", cleaned)
-        cleaned = re.sub(r"(?i)\[([^\]]+?)1\s*:", r"[\1]:", cleaned)
-        cleaned = self.insert_chat_line_breaks(cleaned)
+        # 1. Сверхнадежно удаляем все полноценные таймстампы (включая зашумленные OCR вроде '1 9:06' или '13:18:57') по всему тексту
+        # Паттерн ищет цифры с двоеточиями, допуская возможные опечатки OCR (l, I, З, O вместо цифр) и лишние пробелы перед временем
+        timestamp_pattern = re.compile(
+            r"\b(?:[0-9lI|!ЗO]{1,2}\s+)?[0-9lI|!ЗO]{1,2}\s*[:;]\s*[0-9lI|!ЗO]{2}(?:\s*[:;]\s*[0-9lI|!ЗO]{2})?\b"
+        )
+        text = timestamp_pattern.sub("", text)
+
+        # 2. Удаляем оборванные куски времени в начале или конце строк (например, оставшиеся '13:' или '11:')
+        text = re.sub(r"(?m)^\s*[0-9lI|!ЗO]{1,2}\s*[:;]\s*", "", text)
+        text = re.sub(r"(?m)\s*[0-9lI|!ЗO]{1,2}\s*[:;]\s*$", "", text)
+
+        # Разделяем исходный текст по строкам и убираем пустые
+        raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not raw_lines:
+            return ""
+
+        messages = []
+        current_msg = []
+
+        # Сверхнадежные регулярные выражения для поиска границ новых сообщений чата (когда таймстампы уже вырезаны)
+        # 1. Префиксы каналов или отправителей в скобках (игнорирует до 12 мусорных знаков перед открывающей скобкой)
+        prefix_regex = re.compile(
+            r"^\s*(?:[^\[\]]{1,12})?[\[1lI|!]\s*[^\]:;]{2,15}[\]1lI|!]"
+        )
+        # 2. Имена персонажей с двоеточием или ключевыми словами
+        name_colon_regex = re.compile(
+            r"^\s*[A-Za-zА-Яа-я0-9]{2,12}\s*(?:says|whispers|said|yells|говорит|шепчет)?\s*[:;]",
+            re.I
+        )
+
+        for line in raw_lines:
+            is_new = False
+            if prefix_regex.match(line):
+                is_new = True
+            elif name_colon_regex.match(line):
+                is_new = True
+            elif re.match(r"^\s*(?:To\s+)?\[", line, re.I):
+                is_new = True
+
+            if is_new:
+                if current_msg:
+                    messages.append(" ".join(current_msg))
+                current_msg = [line]
+            else:
+                if current_msg:
+                    current_msg.append(line)  # Склеиваем многострочное сообщение в одну строку через пробел
+                else:
+                    current_msg = [line]
+
+        if current_msg:
+            messages.append(" ".join(current_msg))
+
+        cleaned_messages = []
+        for msg in messages:
+            # 1. Удаление мусора перед открывающей скобкой сообщения (если она есть)
+            if "[" in msg:
+                msg_clean = msg[msg.find("["):]
+            else:
+                msg_clean = msg
+
+            # 2. Исправление фрагментированных скобок
+            msg_clean = re.sub(r"\[\s+", "[", msg_clean)
+            msg_clean = re.sub(r"\s+\]", "]", msg_clean)
+            msg_clean = re.sub(r"^[1lI|!]\s*\[", "[", msg_clean)
+
+            # 3. Применяем замены символов (кириллица -> латиница для структурных частей)
+            msg_clean = self._fix_structural_cyrillic(msg_clean)
+            msg_clean = msg_clean.replace("|", " ").replace("_", " ")
+            msg_clean = msg_clean.replace("То ", "To ").replace("то ", "to ")
+            msg_clean = msg_clean.replace("Тo ", "To ").replace("тo ", "to ")
+            
+            msg_clean = re.sub(r"(?i)\b([a-z])\1{2,}\b", r"\1", msg_clean)
+            msg_clean = re.sub(r"(?i)whispers\s*:\s*To\s+\[", "whispers: [", msg_clean)
+            msg_clean = re.sub(r"(?i)To\s+\[([^\]]+?)1\s*:", r"To [\1]:", msg_clean)
+            msg_clean = re.sub(r"(?i)\[([^\]]+?)1\s*:", r"[\1]:", msg_clean)
+            
+            # Убираем лишние двойные пробелы
+            msg_clean = re.sub(r"\s+", " ", msg_clean).strip()
+            
+            if msg_clean:
+                cleaned_messages.append(msg_clean)
+
+        cleaned = "\n".join(cleaned_messages)
 
         duplicate_match = re.match(
             r"^(?P<left>.+?)\s+(?P<right>(?:To\s+\[[^\]]+\]:|\[[^\]]+\]\s+whispers:).+)$",
@@ -594,8 +698,7 @@ class WoWTranslatorApp:
             if left and right and self.similarity_key(left) == self.similarity_key(right):
                 cleaned = left
 
-        # Consolidated length + alpha check (previously three redundant conditions)
-        if len(cleaned) < 15 or not any(char.isalpha() for char in cleaned):
+        if len(cleaned) < 10 or not any(char.isalpha() for char in cleaned):
             return ""
         return cleaned
 
@@ -630,43 +733,34 @@ class WoWTranslatorApp:
         return re.sub(r"\.\s+(?=[A-ZА-ЯЁ\[])", ".\n", text)
 
     def insert_chat_line_breaks(self, text: str) -> str:
-        text = re.sub(r"\s+(To\s+\[[^\]]+\]:)", r"\n\1", text)
-        text = re.sub(r"\s+(\[[^\]]+\]\s+whispers:)", r"\n\1", text)
-        text = re.sub(r"\s+(\[[^\]]+\]\s+says:)", r"\n\1", text)
-        text = re.sub(r"\s+(\[[^\]]+\]\s+said:)", r"\n\1", text)
-        text = re.sub(r"\s+(\[[^\]]+\]\s+yells:)", r"\n\1", text)
-        text = re.sub(r"\s+(\[[^\]]+\]\s+говорит:)", r"\n\1", text)
-        text = re.sub(r"\s+(\[[^\]]+\]\s+шепчет:)", r"\n\1", text)
-        text = re.sub(r"\s+(\[[^\]]+\]:)", r"\n\1", text)
-        # System notifications: "[Name] has come online." / "Name has gone offline."
-        text = re.sub(
-            r"\s+(?=\[?[A-Z][A-Za-z]+\]?\s+has\s+(?:come\s+online|gone\s+offline))",
-            r"\n",
-            text,
-        )
-        text = re.sub(r"\n+", "\n", text)
-        return text.strip()
+        # Robust prefix: Time? + Channel? + To? + Name (must have letter) + Colon/Keyword
+        # Name part [^\]:;\s]*[A-Za-zА-Яа-я][^\]:;]* ensures we don't match pure numbers (timestamps) as names.
+        prefix = r"(?:(?:\d{1,2}:\d{1,2}(?::\d{1,2})?\s+)?(?:[\[1lI|!]?[^\]:;]{2,15}[\]1lI|!]?\s+)?(?:To\s+)?(?:[\[1lI|!]?[^\]:;]*[A-Za-zА-Яа-я][^\]:;]*[\]1lI|!]?)(?:[:;\s]+(?:whispers|says|said|yells|говорит|шепчет)[:;]|[:;]))"
+        sys_prefix = r"(?:(?:\d{1,2}:\d{2}(?::\d{2})?\s+)?(?:[\[1lI|!]?[A-Z][A-Za-zА-Яа-я0-9]+[\]1lI|!]?)\s+has\s+(?:come\s+online|gone\s+offline))"
+        combined_pattern = r"(?i)(" + prefix + r"|" + sys_prefix + r")"
+        
+        matches = list(re.finditer(combined_pattern, text))
+        if not matches:
+            return text
+            
+        lines = []
+        if matches[0].start() > 0:
+            first_part = text[:matches[0].start()].strip()
+            if first_part:
+                lines.append(first_part)
+                
+        for i, match in enumerate(matches):
+            start = match.start()
+            end = matches[i+1].start() if i + 1 < len(matches) else len(text)
+            line = text[start:end].strip()
+            if line:
+                lines.append(line)
+                
+        return "\n".join(lines)
 
     def extract_chat_lines(self, text: str) -> list[str]:
         parts = [line.strip() for line in text.splitlines() if line.strip()]
-        chat_lines: list[str] = []
-
-        for part in parts:
-            split_lines = re.split(
-                r"(?=(?:"
-                r"To\s+\[[^\]]+\]:"
-                r"|\[[^\]]+\]\s+(?:whispers:|says:|said:|yells:|говорит:|шепчет:)"
-                r"|\[[^\]]+\]:"
-                r"|\[?[A-Z][A-Za-z]+\]?\s+has\s+(?:come\s+online|gone\s+offline)"
-                r"))",
-                part,
-            )
-            for line in split_lines:
-                candidate = line.strip()
-                if candidate:
-                    chat_lines.append(candidate)
-
-        return chat_lines or [text]
+        return parts or [text]
 
     def similarity_key(self, text: str) -> str:
         lowered = text.lower()
@@ -739,22 +833,34 @@ class WoWTranslatorApp:
         self.text_area.config(state=tk.DISABLED)
 
     def display_manual_translation(self, text: str) -> None:
-        request_id_text, english_text = text.split("\n", 1)
-        request_id = int(request_id_text)
+        # Debounce for bottom translation field — only show final result
+        # Ignore intermediate updates during loading
+        if not self._is_manual_translating:
+            try:
+                request_id_text, english_text = text.split("\n", 1)
+                request_id = int(request_id_text)
 
-        self.translated_text.config(state=tk.NORMAL)
-        self.translated_text.delete("1.0", tk.END)
-        self.translated_text.insert(tk.END, english_text)
-        self.translated_text.config(state=tk.DISABLED)
-        pyperclip.copy(english_text)
-        if request_id == self.latest_manual_request_id:
-            self.input_var.set("")
-        self.finish_manual_translation(request_id)
+                self.translated_text.config(state=tk.NORMAL)
+                self.translated_text.delete("1.0", tk.END)
+                self.translated_text.insert(tk.END, english_text)
+                self.translated_text.config(state=tk.DISABLED)
+                pyperclip.copy(english_text)
+                if request_id == self.latest_manual_request_id:
+                    self.input_var.set("")
+                self.finish_manual_translation(request_id)
+
+            except (ValueError, IndexError):
+                # Skip invalid updates
+                pass
+
+        # Mark translation as active
 
     def finish_manual_translation(self, request_id: Optional[int] = None) -> None:
         if request_id is None or request_id == self.latest_manual_request_id:
             self.input_entry.config(state=tk.NORMAL)
             self.input_entry.focus()
+        
+        # Finish translation (remove flag for next update)
 
     def force_focus(self, widget) -> None:
         self.root.focus_force()

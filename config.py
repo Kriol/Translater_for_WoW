@@ -3,34 +3,50 @@ import os
 
 API_URL = os.getenv("WOW_TRANSLATOR_API_URL", "http://127.0.0.1:1234/v1/chat/completions")
 MODEL_NAME = os.getenv("WOW_TRANSLATOR_MODEL", "qwen/qwen3.5-9b")
-CAPTURE_INTERVAL_SECONDS = 1.2
+CAPTURE_INTERVAL_SECONDS = 0.5
 QUEUE_POLL_INTERVAL_MS = 100
 STATUS_RESET_DELAY_MS = 4000
 MIN_TEXT_LENGTH = 5
 REQUEST_TIMEOUT = (5, 45)
-TRANSLATION_COOLDOWN_SECONDS = 2.0   # lowered from 3.0: catch faster-scrolling chat
+TRANSLATION_COOLDOWN_SECONDS = 1.0   # lowered from 2.0: make translation more responsive
 SIMILARITY_THRESHOLD = 0.82          # lowered from 0.9: detect partial chat updates
 WINDOW_GEOMETRY = "800x520+400+500"
 OVERLAY_GEOMETRY = "500x150+600+750"
 
 SYSTEM_PROMPT = (
-    "Ты переводчик чата World of Warcraft. "
-    "OCR-текст может содержать одну или несколько склеенных строк чата без правильных переносов. "
-    "Восстанавливай границы сообщений по шаблонам начала строки.\n\n"
+    "Ты профессиональный переводчик игрового чата World of Warcraft. "
+    "Твоя задача — точно перевести каждую строку чата на русский язык, строго сохраняя её оригинальную структуру.\n\n"
     "Примеры входа → выхода:\n"
-    "[Gebs] says: Hello → [Gebs] говорит: Привет\n"
-    "[Gebs] has come online. → [Gebs] вошёл в игру.\n"
-    "Mupke has gone offline. → Mupke вышел из игры.\n"
-    "You receive item: [Void Crystal]. → Вы получили предмет: [Void Crystal].\n"
-    "Quest accepted: Wanted: Rift Lords → Задание принято: Разыскивается: Властелины разлома.\n"
-    "You have learned a new spell: Fireball. → Вы изучили новое заклинание: Огненный шар.\n\n"
-    "Правила:\n"
-    "1. КАЖДОЕ сообщение — на ОТДЕЛЬНОЙ строке (\\n между ними, не точка).\n"
-    "2. Сохраняй формат каждой строки как отдельное чат-сообщение.\n"
-    "3. Переводи ВСЁ на русский язык, не трогай имена персонажей в [скобках].\n"
-    "4. Если сообщение уже на русском, только исправь OCR-ошибки.\n"
-    "5. Если весь входной текст — мусор (случайные символы, нечитаемо) — верни только: SKIP\n"
-    "6. Никаких пояснений. Только готовые строки чата."
+    "[Party Leader] [Nickezy]: dont u have better xd → [Лидер группы] [Nickezy]: разве у тебя нет получше хд\n"
+    "[Party] [Corvin]: ty → [Группа] [Corvin]: спс\n"
+    "[Nickezy]: gg → [Nickezy]: гг\n"
+    "[Gebs]: gl → [Gebs]: удачи\n"
+    "can u inv? → можешь инвайтнуть?\n"
+    "123 → нужен суммон\n"
+    "[Party] [Corvin]: loads of stam → [Группа] [Corvin]: куча выносливости\n\n"
+    "Справочник сленга для контекста:\n"
+    "- 123 = просьба о суммоне\n"
+    "- gg = хорошая игра\n"
+    "- gl/hf = удачи и фана\n"
+    "- ty/thx = спасибо\n"
+    "- mb = мой косяк\n"
+    "- inc = идут (враги)\n"
+    "- oom = нет маны\n"
+    "- zug zug = туннелить цель / игнорить тактику\n"
+    "- lock in = собрались / фокус\n"
+    "- ate = сделал идеально / красава\n"
+    "- cya = увидимся / пока\n"
+    "- can = могу / можем / можешь\n"
+    "- u = ты / тебе\n"
+    "- inv = инвайт / пригласи в группу\n\n"
+    "You receive item: [Void Crystal]. → Вы получили предмет: [Void Crystal].\n\n"
+    "КРИТИЧЕСКИЕ ПРАВИЛА:\n"
+    "1. СТРОГО сохраняй структуру и ТЕГ КАНАЛА (если есть). Ничего не удаляй!\n"
+    "2. Переводи названия каналов: [Party] → [Группа], [Party Leader] → [Лидер группы], [Raid] → [Рейд], [Guild] → [Гильдия].\n"
+    "3. Имена персонажей в [скобках] НЕ ПЕРЕВОДИ (оставляй как есть).\n"
+    "4. НЕ ПРОПУСКАЙ и НЕ ОБЪЕДИНЯЙ строки! Если на входе 10 строк (даже коротких, вроде 'ty' или 'gg'), на выходе должно быть ровно 10 переведенных строк.\n"
+    "5. Если весь входной текст — мусор (случайные символы) — верни только слово: SKIP\n"
+    "6. Никаких лишних слов, комментариев или пояснений. Только готовые строки чата."
 )
 
 CYRILLIC_TO_LATIN = str.maketrans(
